@@ -7,9 +7,11 @@ from flask import *
 
 
 app = Flask(__name__)
-CONNECTED_NODES = set()
-PROTOCOL = "http://"
+CONNECTED_NODES = dict()
 RELAYED_MESSAGES = dict()
+PROTOCOL = "http://"
+DEFAULT_PORT = 6969
+NODE_ATTEMPTS = 3
 
 # returns the node address for other nodes to connect to
 def get_node_address() -> str:
@@ -20,7 +22,7 @@ def get_node_address() -> str:
 @app.route("/ping", methods=["POST"])
 def ping_node() -> str:
     node = request.get_json()["node"]
-    CONNECTED_NODES.add(node)
+    CONNECTED_NODES[node] = NODE_ATTEMPTS
     return node
 
 
@@ -37,7 +39,7 @@ def bootstrap_node() -> list:
                 "node": get_node_address()
             })
             if r.status_code == 200:
-                CONNECTED_NODES.add(node)
+                CONNECTED_NODES[node] = NODE_ATTEMPTS
             else:
                 failed_node_pings.append(node)
         except:
@@ -63,12 +65,26 @@ def relay_message() -> list:
         # store the hash of the message so the node doesn't relay more than once
         RELAYED_MESSAGES[message_hash] = 1
         # pick a random set of nodes to relay the message to
-        nodes = random.sample(list(CONNECTED_NODES), min(len(CONNECTED_NODES), 5))
+        nodes = random.sample(list(CONNECTED_NODES), min(len(CONNECTED_NODES), 10))
         successful_node_relays = list()
         for node in nodes:
-            r = requests.post(node + url_for("relay_message"), json=message)
-            if r.status_code == 200:
-                successful_node_relays.append(node)
+            is_relay_unsuccessful = False
+            try:
+                r = requests.post(node + url_for("relay_message"), json=message)
+                if r.status_code == 200:
+                    successful_node_relays.append(node)
+                    # reset the attempts if a relay is successful
+                    CONNECTED_NODES[node] = NODE_ATTEMPTS
+                else:
+                    is_relay_unsuccessful = True
+            except:
+                is_relay_unsuccessful = True
+            if is_relay_unsuccessful:
+                # implement the node dropoff mechanism
+                # if the amount of attemps left == 0, drop the node
+                CONNECTED_NODES[node] = CONNECTED_NODES[node] - 1
+                if CONNECTED_NODES[node] == 0:
+                    del CONNECTED_NODES[node]
         print(message)
         return successful_node_relays
 
@@ -78,7 +94,7 @@ if __name__ == "__main__":
         if len(sys.argv) > 1:
             NODE_PORT = int(sys.argv[1])
         else:
-            NODE_PORT = 6969
+            NODE_PORT = DEFAULT_PORT
     except:
-        NODE_PORT = 6969
+        NODE_PORT = DEFAULT_PORT
     app.run(host="0.0.0.0", debug=True, port=NODE_PORT)
