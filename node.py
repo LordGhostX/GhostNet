@@ -1,6 +1,5 @@
 import sys
 import json
-import random
 import hashlib
 import requests
 from flask import *
@@ -8,14 +7,12 @@ from flask import *
 
 app = Flask(__name__)
 CONNECTED_NODES = dict()
-RELAYED_MESSAGES = dict()
+RELAYED_MESSAGES = set()
 
 # constants/enums
 PROTOCOL = "http://"
 DEFAULT_PORT = 6969
-NODE_ATTEMPTS = 3
-MAX_RELAY_MESH = 5
-MAX_NODE_SHARES = 5
+RELAY_ATTEMPTS = 3
 
 # returns the node address for other nodes to connect to
 def get_node_address() -> str:
@@ -26,7 +23,7 @@ def get_node_address() -> str:
 @app.route("/ping", methods=["POST"])
 def ping_node() -> str:
     node = request.get_json()["node"]
-    CONNECTED_NODES[node] = NODE_ATTEMPTS
+    CONNECTED_NODES[node] = RELAY_ATTEMPTS
     return node
 
 
@@ -43,7 +40,7 @@ def bootstrap_node() -> list[list, list]:
                 "node": get_node_address()
             })
             if r.status_code == 200:
-                CONNECTED_NODES[node] = NODE_ATTEMPTS
+                CONNECTED_NODES[node] = RELAY_ATTEMPTS
                 successful_node_pings.add(node)
             else:
                 failed_node_pings.add(node)
@@ -64,27 +61,25 @@ def get_connected_nodes() -> list:
 def relay_message() -> list:
     message = request.get_json()
     message_hash = hashlib.sha256(json.dumps(message).encode()).hexdigest()
-    if RELAYED_MESSAGES.get(message_hash):
+    if message_hash in RELAYED_MESSAGES:
         return list()
     else:
         # store the hash of the message so the node doesn't relay more than once
-        RELAYED_MESSAGES[message_hash] = 1
+        RELAYED_MESSAGES.add(message_hash)
 
         # handle the message however you wish
         handle_message(message)
 
-        # pick a random set of nodes to relay the message to
-        nodes = random.sample(list(CONNECTED_NODES), min(len(CONNECTED_NODES), MAX_RELAY_MESH))
+        # relay the message to all connected nodes
         successful_node_relays = list()
-        for node in nodes:
-
+        for node in list(CONNECTED_NODES):
             is_relay_unsuccessful = False
             try:
                 r = requests.post(node + url_for("relay_message"), json=message)
                 if r.status_code == 200:
                     successful_node_relays.append(node)
                     # reset the attempts if a relay is successful
-                    CONNECTED_NODES[node] = NODE_ATTEMPTS
+                    CONNECTED_NODES[node] = RELAY_ATTEMPTS
                 else:
                     is_relay_unsuccessful = True
             except:
@@ -103,11 +98,11 @@ def relay_message() -> list:
 @app.route("/node-sharing")
 def node_sharing() -> list[list, list]:
     successful_node_pings, unsuccessful_node_pings = set(), set()
-    for node in random.sample(list(CONNECTED_NODES), min(len(CONNECTED_NODES), MAX_NODE_SHARES)):
+    for node in list(CONNECTED_NODES):
         # fetch all the nodes connected to an external node
         r = requests.get(node + url_for("get_connected_nodes"))
         if r.status_code == 200:
-            node_connections = random.sample(r.json(), min(len(r.json()), MAX_NODE_SHARES))
+            node_connections = r.json()
         else:
             node_connections = list()
 
@@ -121,7 +116,7 @@ def node_sharing() -> list[list, list]:
                     "node": get_node_address()
                 })
                 if r.status_code == 200:
-                    CONNECTED_NODES[connection] = NODE_ATTEMPTS
+                    CONNECTED_NODES[connection] = RELAY_ATTEMPTS
                     successful_node_pings.add(connection)
                 else:
                     unsuccessful_node_pings.add(connection)
@@ -130,7 +125,8 @@ def node_sharing() -> list[list, list]:
     return [list(successful_node_pings), list(unsuccessful_node_pings)]
 
 
-def handle_message(message):
+# handle messages relayed to the node
+def handle_message(message) -> None:
     print(message, get_node_address())
 
 

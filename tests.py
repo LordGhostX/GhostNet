@@ -1,8 +1,11 @@
 import sys
 import time
 import runpy
+import random
 import multiprocessing
 import requests
+import networkx as nx
+import matplotlib.pyplot as plt
 
 
 # run a node instance on a given port
@@ -25,7 +28,7 @@ def test_node():
     for port in range(6970, 6975):
         processes[port] = multiprocessing.Process(target=run_node, args=(port,))
         processes[port].start()
-        time.sleep(0.25)
+    time.sleep(5)
         
     # check all the nodes have zero connections
     URL = "http://127.0.0.1:"
@@ -76,5 +79,50 @@ def test_node():
     assert len(requests.get(URL + "6971/nodes").json()) == 2
 
 
+# runs a simulation of the network with 100 nodes and visualizes it
+def test_network_simulation(number_of_nodes=100, starting_port=7001, visualize=False):
+    full_port_range = range(starting_port, starting_port + number_of_nodes)
+    for port in full_port_range:
+        process = multiprocessing.Process(target=run_node, args=(port,))
+        process.start()
+    time.sleep(30)
+
+    # let the first quarter of nodes bootstrap each other in a series
+    # A -> B -> C -> D -> E, etc
+    URL = "http://127.0.0.1:"
+    quarter_port_range = range(starting_port, starting_port + (number_of_nodes // 4) - 1)
+    for port in quarter_port_range:
+        requests.post(f"{URL}{port}/bootstrap", json=[f"{URL}{port + 1}"])
+
+    # select a sample of the network to run node sharing
+    for port in random.sample(quarter_port_range, number_of_nodes // 5):
+        requests.get(f"{URL}{port}/node-sharing")
+
+    # let the remaining nodes pick a random node to bootstrap
+    for port in range(starting_port + (number_of_nodes // 4), starting_port + number_of_nodes):
+        requests.post(f"{URL}{port}/bootstrap", json=[f"{URL}{random.choice(quarter_port_range)}"])
+
+    # relay a message to test the connectivity
+    requests.post(f"{URL}{starting_port}/relay", json={"message": "Hello, World!"})
+
+    # map out how each node connects to each other
+    node_mapping = dict()
+    for port in full_port_range:
+        node_mapping[port] = requests.get(f"{URL}{port}/nodes").json()
+
+    # visualize the mapping using an undirected graph
+    if visualize:
+        G = nx.Graph()
+        for node, edges in node_mapping.items():
+            for edge in edges:
+                edge_port = int(edge.split(":")[2])
+                if node < edge_port:
+                    G.add_edge(node - starting_port + 1, edge_port - starting_port + 1)
+        pos = nx.kamada_kawai_layout(G)
+        nx.draw(G, pos, with_labels=True, node_color="lightblue", font_weight="bold", node_size=750, font_size=10)
+        plt.show()
+
+
 if __name__ == "__main__":
     test_node()
+    test_network_simulation(100, visualize=True)
