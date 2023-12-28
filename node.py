@@ -14,8 +14,8 @@ RELAYED_MESSAGES = dict()
 PROTOCOL = "http://"
 DEFAULT_PORT = 6969
 NODE_ATTEMPTS = 3
-RELAY_MESH = 5
-MAX_PX_NODES = 5
+MAX_RELAY_MESH = 5
+MAX_NODE_SHARES = 5
 
 # returns the node address for other nodes to connect to
 def get_node_address() -> str:
@@ -34,8 +34,8 @@ def ping_node() -> str:
 # returns the list of node pings that were successful and unsuccessful
 @app.route("/bootstrap", methods=["POST"])
 def bootstrap_node() -> list[list, list]:
-    nodes = request.get_json()["nodes"]
-    successful_node_pings, failed_node_pings = list(), list()
+    nodes = request.get_json()
+    successful_node_pings, failed_node_pings = set(), set()
     for node in nodes:
         # if the ping to external node is successful, add it to the list of connected nodes
         try:
@@ -44,13 +44,13 @@ def bootstrap_node() -> list[list, list]:
             })
             if r.status_code == 200:
                 CONNECTED_NODES[node] = NODE_ATTEMPTS
-                successful_node_pings.append(node)
+                successful_node_pings.add(node)
             else:
-                failed_node_pings.append(node)
+                failed_node_pings.add(node)
         except:
-            failed_node_pings.append(node)
+            failed_node_pings.add(node)
             
-    return [successful_node_pings, failed_node_pings]
+    return [list(successful_node_pings), list(failed_node_pings)]
 
 
 # returns the list of connected nodes
@@ -69,10 +69,15 @@ def relay_message() -> list:
     else:
         # store the hash of the message so the node doesn't relay more than once
         RELAYED_MESSAGES[message_hash] = 1
+
+        # handle the message however you wish
+        handle_message(message)
+
         # pick a random set of nodes to relay the message to
-        nodes = random.sample(list(CONNECTED_NODES), min(len(CONNECTED_NODES), RELAY_MESH))
+        nodes = random.sample(list(CONNECTED_NODES), min(len(CONNECTED_NODES), MAX_RELAY_MESH))
         successful_node_relays = list()
         for node in nodes:
+
             is_relay_unsuccessful = False
             try:
                 r = requests.post(node + url_for("relay_message"), json=message)
@@ -90,20 +95,19 @@ def relay_message() -> list:
                 CONNECTED_NODES[node] = CONNECTED_NODES[node] - 1
                 if CONNECTED_NODES[node] == 0:
                     del CONNECTED_NODES[node]
-        print(message)
         return successful_node_relays
 
 
 # requests for new nodes to connect to from already connected ones
 # returns the new node connections created
-@app.route("/node-exchange")
-def node_exchange() -> list:
+@app.route("/node-sharing")
+def node_sharing() -> list[list, list]:
     successful_node_pings, unsuccessful_node_pings = set(), set()
-    for node in list(CONNECTED_NODES):
+    for node in random.sample(list(CONNECTED_NODES), min(len(CONNECTED_NODES), MAX_NODE_SHARES)):
         # fetch all the nodes connected to an external node
         r = requests.get(node + url_for("get_connected_nodes"))
         if r.status_code == 200:
-            node_connections = random.sample(r.json(), min(len(r.json()), MAX_PX_NODES))
+            node_connections = random.sample(r.json(), min(len(r.json()), MAX_NODE_SHARES))
         else:
             node_connections = list()
 
@@ -123,7 +127,11 @@ def node_exchange() -> list:
                     unsuccessful_node_pings.add(connection)
             except:
                 unsuccessful_node_pings.add(connection)
-    return list(successful_node_pings)
+    return [list(successful_node_pings), list(unsuccessful_node_pings)]
+
+
+def handle_message(message):
+    print(message, get_node_address())
 
 
 if __name__ == "__main__":
@@ -134,4 +142,4 @@ if __name__ == "__main__":
             NODE_PORT = DEFAULT_PORT
     except:
         NODE_PORT = DEFAULT_PORT
-    app.run(host="0.0.0.0", debug=True, port=NODE_PORT)
+    app.run(host="0.0.0.0", debug=False, port=NODE_PORT)
