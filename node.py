@@ -15,6 +15,7 @@ DEFAULT_PORT = 6969
 RELAY_ATTEMPTS = 3
 
 # returns the node address for other nodes to connect to
+@app.route("/address")
 def get_node_address() -> str:
     return PROTOCOL + request.host
 
@@ -24,7 +25,7 @@ def get_node_address() -> str:
 def ping_node() -> str:
     node = request.get_json()["node"]
     CONNECTED_NODES[node] = RELAY_ATTEMPTS
-    return node
+    return get_node_address()
 
 
 # bootstraps the node with a list of external nodes
